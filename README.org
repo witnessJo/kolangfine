@@ -1,0 +1,6 @@
+* kolangfine
+A golang project for testing Kiwi(Korean Intelligent Word Identifier)
+
+
+
+
