@@ -92,7 +92,7 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 	var sb strings.Builder
 	skipParen := false
 	pendingClose := false
-	pendingCloseChar := ")"
+	pendingCloseChar := ""
 
 	for i, tok := range tokens {
 		if skipParen {
