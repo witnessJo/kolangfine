@@ -40,6 +40,10 @@ func runeSlice(runes []rune, start, end int) string {
 	return string(runes[start:end])
 }
 
+func isContentNoun(tag kiwi.POSType) bool {
+	return tag == kiwi.POS_NNG || tag == kiwi.POS_NNP
+}
+
 // correctSpacing takes a string with potentially incorrect spacing and returns
 // a properly spaced string using Kiwi's morphological analysis.
 func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
@@ -64,15 +68,78 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 	// Position is the rune index in the original (stripped) text where the token starts.
 	// We extract text between token positions from the original string to preserve
 	// the actual characters (Kiwi's Form may normalize characters).
+	// Pre-scan: identify SSO tokens to move before their preceding noun.
+	// Heuristic: when Noun(NNG/NNP) + SSO + Noun(NNG/NNP), the ( likely belongs
+	// before the preceding noun (e.g., "연평잔액(보수" → "(연평잔액보수").
+	// Does NOT trigger for Noun + SSO + Number (e.g., "정배수(200,000" stays).
+	moveSSO := make(map[int]bool)
+	moveSSC := make(map[int]bool)
+	for i := 1; i < len(tokens)-1; i++ {
+		// ( fix: Noun + ( + Noun → move ( before first Noun
+		if tokens[i].Tag == kiwi.POS_SSO &&
+			isContentNoun(tokens[i-1].Tag) &&
+			isContentNoun(tokens[i+1].Tag) {
+			moveSSO[i] = true
+		}
+		// ) fix: Noun + ) + Noun → move ) after second Noun
+		if tokens[i].Tag == kiwi.POS_SSC &&
+			isContentNoun(tokens[i-1].Tag) &&
+			isContentNoun(tokens[i+1].Tag) {
+			moveSSC[i] = true
+		}
+	}
+
 	var sb strings.Builder
+	skipParen := false
+	pendingClose := false
+	pendingCloseChar := ")"
 
 	for i, tok := range tokens {
+		if skipParen {
+			skipParen = false
+			continue
+		}
+
 		// Determine the end position of this token's span in the original text
 		var endPos int
 		if i+1 < len(tokens) {
 			endPos = tokens[i+1].Position
 		} else {
 			endPos = totalRunes
+		}
+
+		// Check if next token is a moved SSO — emit the opening bracket before this noun's segment
+		if i+1 < len(tokens) && moveSSO[i+1] {
+			ssoPos := tokens[i+1].Position
+			nounSegment := runeSlice(runes, tok.Position, ssoPos)
+			// Extract the actual bracket character from the original text
+			openBracket := runeSlice(runes, ssoPos, ssoPos+1)
+
+			needSpace := !noSpaceTags[tok.Tag]
+			if i > 0 && tokens[i-1].Tag == kiwi.POS_SSO {
+				needSpace = false
+			}
+			if i > 0 && tokens[i-1].Tag == kiwi.POS_SW {
+				needSpace = false
+			}
+			if i == 0 {
+				needSpace = false
+			}
+
+			if needSpace {
+				sb.WriteString(" ")
+			}
+			sb.WriteString(openBracket)
+			sb.WriteString(nounSegment)
+			skipParen = true
+			continue
+		}
+
+		if moveSSC[i] {
+			// This is the SSC token being moved — skip it, extract the actual bracket character
+			pendingClose = true
+			pendingCloseChar = runeSlice(runes, tok.Position, tok.Position+1)
+			continue
 		}
 
 		// Extract the original text for this token
@@ -118,10 +185,37 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 			needSpace = false
 		}
 
+		// When SSC was moved past this token (skipped earlier), treat previous as
+		// the noun before SSC, not the SSC itself
+		if tokens[i-1].Tag == kiwi.POS_SSC && moveSSC[i-1] {
+			// The SSC was skipped; for spacing, act as if prev token is the one before SSC
+			if i >= 2 {
+				prevTag := tokens[i-2].Tag
+				needSpace = !noSpaceTags[tok.Tag]
+				if prevTag == kiwi.POS_SSO {
+					needSpace = false
+				}
+				if prevTag == kiwi.POS_SW {
+					needSpace = false
+				}
+			}
+		}
+
 		if needSpace {
 			sb.WriteString(" ")
 		}
 		sb.WriteString(segment)
+
+		// Emit pending closing bracket after the noun that follows a moved SSC
+		if pendingClose && isContentNoun(tok.Tag) {
+			sb.WriteString(pendingCloseChar)
+			pendingClose = false
+		}
+	}
+
+	// If pendingClose still set (edge case), emit it
+	if pendingClose {
+		sb.WriteString(pendingCloseChar)
 	}
 
 	return sb.String(), nil
@@ -179,6 +273,7 @@ func main() {
 		{"기준일 현재 동 운용전문인력이 운용 중인 성과보수가 약정된 집합투자기구는 없습니다."},
 		{"수익자는 100,000좌 또는 그 정배수(200,000좌, 300,000좌 등)로만 설정을 청구하거나"},
 		{"총보수･비용 비율은 이 투자신탁에서 지출되는 보수와 기타비용 총액을 순자산 연평잔액(보수 및 비 용 차감전 기준)으로 나누어 산출합니다."},
+		{"총보수･비용 비율은 이 투자신탁에서 지출되는 보수와 기타비용 총액을 순자산 연평잔액[보수 및 비 용 차감전 기상]준으로 나누어 산출합니다."},
 		{"법 제110조에 의하여 신탁회사가 발행한 수익증권, 법 제9조 제21항의 규정에 의한 집합투자증권 및 법 제234조의 규정에 의한 상장지수집합투자기구 집합투자증권(이와 유사한 것으로 서 외국 법령에 따라 발행된 것을 포함)"},
 	}
 
