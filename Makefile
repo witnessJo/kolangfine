@@ -4,6 +4,8 @@ all: install-model build
 
 .PHONY: clean
 clean:
+	rm ./kolangfine || true
+	rm -rf ./base
 
 .PHONY: build
 build:
