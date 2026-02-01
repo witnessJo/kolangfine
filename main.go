@@ -2,11 +2,30 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode/utf8"
 
 	kiwi "github.com/codingpot/kiwigo"
 )
+
+// preservePatterns lists regex patterns whose matches should be preserved as-is
+// (not broken up by Kiwi's morphological analysis).
+var preservePatterns = []*regexp.Regexp{
+	// URLs
+	regexp.MustCompile(`https?://\S+`),
+	regexp.MustCompile(`www\.\S+`),
+	// Email addresses
+	regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`),
+	// File paths (Windows)
+	regexp.MustCompile(`[A-Z]:\\[\w\\.\-]+`),
+	// File paths (Unix)
+	regexp.MustCompile(`/(?:[\w.\-]+/)+[\w.\-]+`),
+	// Signed numbers with optional decimal and unit (e.g., -5.3%, +12.5%, ++5.3%)
+	regexp.MustCompile(`[+\-]{1,2}\d+(?:\.\d+)?%?`),
+	// English words/abbreviations (2+ chars to avoid single-letter Korean jamo conflicts)
+	regexp.MustCompile(`[A-Za-z][A-Za-z0-9]{1,}(?:\.[A-Za-z0-9]+)*`),
+}
 
 // Tags that should NOT have a space before them (they attach to the preceding word)
 var noSpaceTags = map[kiwi.POSType]bool{
@@ -47,7 +66,18 @@ func isContentNoun(tag kiwi.POSType) bool {
 // correctSpacing takes a string with potentially incorrect spacing and returns
 // a properly spaced string using Kiwi's morphological analysis.
 func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
-	stripped := strings.ReplaceAll(input, " ", "")
+	// Preserve patterns (URLs, emails, paths, English words) with PUA placeholders
+	var preserved []string
+	text := input
+	for _, pat := range preservePatterns {
+		text = pat.ReplaceAllStringFunc(text, func(match string) string {
+			placeholder := string(rune(0xE000 + len(preserved)))
+			preserved = append(preserved, match)
+			return placeholder
+		})
+	}
+
+	stripped := strings.ReplaceAll(text, " ", "")
 	if stripped == "" {
 		return "", nil
 	}
@@ -218,7 +248,12 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 		sb.WriteString(pendingCloseChar)
 	}
 
-	return sb.String(), nil
+	result := sb.String()
+	for i, u := range preserved {
+		placeholder := string(rune(0xE000 + i))
+		result = strings.ReplaceAll(result, placeholder, u)
+	}
+	return result, nil
 }
 
 // correctSpacingArray takes a string array (tokens with potentially bad spacing),
@@ -274,6 +309,8 @@ func main() {
 		{"수익자는 100,000좌 또는 그 정배수(200,000좌, 300,000좌 등)로만 설정을 청구하거나"},
 		{"총보수･비용 비율은 이 투자신탁에서 지출되는 보수와 기타비용 총액을 순자산 연평잔액(보수 및 비 용 차감전 기준)으로 나누어 산출합니다."},
 		{"법 제110조에 의하여 신탁회사가 발행한 수익증권, 법 제9조 제21항의 규정에 의한 집합투자증권 및 법 제234조의 규정에 의한 상장지수집합투자기구 집합투자증권(이와 유사한 것으로 서 외국 법령에 따라 발행된 것을 포함)"},
+		{"www.example.com은 당해 서비스와 관련하여 필요하다고 인정되는 경우에는 언제든지 그 내용을 변경할 수 있습니다."},
+		{"-5.3% 하락하였다. ++5.3% 상승하였다."},
 	}
 
 	for _, ex := range stringExamples {
