@@ -25,6 +25,14 @@ install-model:
 	tar --no-same-owner -xzvf model.tgz
 	rm -f model.tgz
 
+.PHONY: update-result-img
+update-result-img:
+	@mkdir -p img
+	go run ./main.go > img/result.txt
+	pango-view --font="monospace 11" -qo img/result.png img/result.txt
+	@rm -f img/result.txt
+	@echo "Updated img/result.png"
+
 .PHONY: test
 test:
 	./scripts/run_tests.bash
