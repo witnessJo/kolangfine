@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	kiwi "github.com/codingpot/kiwigo"
@@ -93,7 +94,7 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 	// treats them as separate tokens.
 	var stripBuf strings.Builder
 	for _, r := range text {
-		if r == ' ' {
+		if unicode.IsSpace(r) {
 			continue
 		}
 		// Insert space before a PUA placeholder if the previous char wasn't a space
@@ -353,6 +354,10 @@ func main() {
 		// 전각 괄호 보존 테스트
 		{"（주）회사명은 투자신탁을 운용합니다."},
 		{"（별첨）참조하시기 바랍니다."},
+		// 탭/개행 처리 테스트
+		{"투자자는\t수익증권\t입고 시점을 점검하여 주시기 바랍니다."},
+		{"투자대상 의 규모\n및 유동성 등을 고려하여\n투자하고 있습니다."},
+		{"수익자는\t\t100,000좌 또는\t그 정배수로 청구합니다."},
 	}
 
 	for _, ex := range stringExamples {
