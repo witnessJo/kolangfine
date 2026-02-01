@@ -17,10 +17,22 @@ var preservePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`www\.\S+`),
 	// Email addresses
 	regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`),
+	// Korean date-time (e.g., 2024년 1월 15일 12시 30분 45초)
+	regexp.MustCompile(`\d{4}년\s*\d{1,2}월\s*\d{1,2}일(?:\s*\d{1,2}시(?:\s*\d{1,2}분(?:\s*\d{1,2}초)?)?)?`),
+	// Date-time with separator (e.g., 2024.01.15 12:30, 2024-01-15 12:30:00)
+	regexp.MustCompile(`\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?`),
+	// Date with spaced dots (e.g., 2024. 01. 15 or 2024. 01. 15.)
+	regexp.MustCompile(`\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?`),
+	// Date only (e.g., 2024.01.15, 2024-01-15, 2024/01/15)
+	regexp.MustCompile(`\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}`),
+	// Time with colon (e.g., 12:30, 12:30:00)
+	regexp.MustCompile(`\d{1,2}:\d{2}(?::\d{2})?`),
 	// File paths (Windows)
 	regexp.MustCompile(`[A-Z]:\\[\w\\.\-]+`),
 	// File paths (Unix)
 	regexp.MustCompile(`/(?:[\w.\-]+/)+[\w.\-]+`),
+	// Full-width parenthesized expressions (e.g., （주）, （株）, （별첨）)
+	regexp.MustCompile(`（[^）]+）`),
 	// Signed numbers with optional decimal and unit (e.g., -5.3%, +12.5%, ++5.3%)
 	regexp.MustCompile(`[+\-]{1,2}\d+(?:\.\d+)?%?`),
 	// English words/abbreviations (2+ chars to avoid single-letter Korean jamo conflicts)
@@ -77,7 +89,24 @@ func correctSpacing(k *kiwi.Kiwi, input string) (string, error) {
 		})
 	}
 
-	stripped := strings.ReplaceAll(text, " ", "")
+	// Remove spaces, but keep a space before/after PUA placeholders so Kiwi
+	// treats them as separate tokens.
+	var stripBuf strings.Builder
+	for _, r := range text {
+		if r == ' ' {
+			continue
+		}
+		// Insert space before a PUA placeholder if the previous char wasn't a space
+		if r >= 0xE000 && r <= 0xE000+rune(len(preserved)-1) {
+			if stripBuf.Len() > 0 {
+				stripBuf.WriteRune(' ')
+			}
+			stripBuf.WriteRune(r)
+			continue
+		}
+		stripBuf.WriteRune(r)
+	}
+	stripped := strings.TrimSpace(stripBuf.String())
 	if stripped == "" {
 		return "", nil
 	}
@@ -310,7 +339,20 @@ func main() {
 		{"총보수･비용 비율은 이 투자신탁에서 지출되는 보수와 기타비용 총액을 순자산 연평잔액(보수 및 비 용 차감전 기준)으로 나누어 산출합니다."},
 		{"법 제110조에 의하여 신탁회사가 발행한 수익증권, 법 제9조 제21항의 규정에 의한 집합투자증권 및 법 제234조의 규정에 의한 상장지수집합투자기구 집합투자증권(이와 유사한 것으로 서 외국 법령에 따라 발행된 것을 포함)"},
 		{"www.example.com은 당해 서비스와 관련하여 필요하다고 인정되는 경우에는 언제든지 그 내용을 변경할 수 있습니다."},
-		{"-5.3% 하락하였다. ++5.3% 상승하였다."},
+		{"-5.3%하락하였다.++5.3%상승하였다."},
+		// 날짜/시간 보존 테스트
+		{"2024.01.15 12:30에 회 의가 시작됩니다."},
+		{"2024-01-15 12:30:00 기준으로 산출합니다."},
+		{"2024년 1월 15일 12시 30분에 개최합니다."},
+		{"2024. 01. 15. 현재 기준입니다."},
+		{"2024/01/15부터 적용됩니다."},
+		{"매일 14:30에 기준가격이 산출됩니다."},
+		// 파일 경로 보존 테스트
+		{"설정 파일은 C:\\Users\\admin\\config.ini에 저장됩니다."},
+		{"로그 파일은 /var/log/app/error.log에 기록됩니다."},
+		// 전각 괄호 보존 테스트
+		{"（주）회사명은 투자신탁을 운용합니다."},
+		{"（별첨）참조하시기 바랍니다."},
 	}
 
 	for _, ex := range stringExamples {
